@@ -1,0 +1,272 @@
+var roi = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+[[[110.494259873547,22.4732209344152],[110.494259873547,22.3532209344152],[110.374259873547,22.3532209344152],[110.374259873547,22.4732209344152]]]
+                , null, false);
+         
+var roi1 = geometry
+Map.centerObject(roi,12)
+
+// Visualization parameters
+var palette = ['FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718',
+               '74A901', '66A000', '529400', '3E8601', '207401', '056201',
+               '004C00', '023B01', '012E01', '011D01', '011301'];
+               
+//Visualization parameters，Synthesized in 8, 4, and 3 bands               
+var rgbVis = {
+  min: 0.0,
+  max: 0.35,
+  bands: ['B11', 'B8', 'B4'],
+};
+               
+//Cropping by Vector Boundary
+function roiClip(image){
+  return image.clip(roi)
+}
+
+function roiClip1(image){
+  return image.clip(roi1)
+}
+
+function remove_cloud(image) {
+  var qa = image.select('QA60');
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0).and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  var ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI'); // Use smoothed bands
+  var ndsi = image.normalizedDifference(['B3', 'B11']).rename('NDSI'); // Use smoothed bands
+  
+  var cloudMask = mask.and(ndvi.gt(0.1)).and(ndsi.lt(0.8));
+  return image.updateMask(cloudMask).divide(10000).select("B.*").copyProperties(image, ["system:time_start"]);
+}
+
+
+//denoise
+function smooth(image) {
+  var smoothImage = image.reduceNeighborhood({
+    reducer: ee.Reducer.mean(),
+    kernel: ee.Kernel.square(3),
+  });
+  return smoothImage;
+}
+
+//Data set selection
+var S2_01 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+           .filterDate("2018-01-01", "2018-01-19")
+           .select('B2','B3', 'B4', 'B8', 'B11', 'QA60')
+           .filterBounds(roi)
+           .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 5))
+           .map(remove_cloud)
+           .map(roiClip)
+
+var S2_02 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+           .filterDate("2018-01-19", "2018-03-28")
+           .select('B2','B3', 'B4', 'B8', 'B11', 'QA60')
+           .filterBounds(roi)
+           .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 5))
+           .map(remove_cloud)
+           .map(roiClip)
+
+var S2_011 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+           .filterDate("2018-01-01", "2018-01-19")
+           .select('B2','B3', 'B4', 'B8', 'B11', 'QA60')
+           .filterBounds(roi1)
+           .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 5))
+           .map(remove_cloud)
+           .map(roiClip1)
+
+var S2_022 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+           .filterDate("2018-01-19", "2018-03-28")
+           .select('B2','B3', 'B4', 'B8', 'B11', 'QA60')
+           .filterBounds(roi1)
+           .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 5))
+           .map(remove_cloud)
+           .map(roiClip1)
+
+//Running image (of the same day)
+var newImgS2_01 = S2_011.max();
+var newImgS2_02 = S2_022.max();
+
+
+var newImgS2_011 = S2_01.max();
+print(newImgS2_011)
+var newImgS2_022 = S2_02.max();
+print(newImgS2_022)
+
+Map.addLayer(newImgS2_011, rgbVis, 'S2_01'); 
+Map.addLayer(newImgS2_022, rgbVis, 'S2_02'); 
+
+//Calculate NBR
+function calNBR(image){
+  var NBR = image.expression('(NIR - SWIR)/(NIR + SWIR)',{
+      NIR: image.select('B8'),   
+      SWIR: image.select('B11'),   
+  }).rename('NBR');
+  return image.addBands(NBR);
+}
+
+//Calculate dNBR
+function caldNBR(image1,image2){ 
+  var dNBR = (image1,image2).expression('NBR_01 - NBR_02',{
+      NBR_01: image1.select('NBR'),   
+      NBR_02: image2.select('NBR'),   
+  }).rename('dNBR');
+  return image1.addBands(dNBR),image2.addBands(dNBR);
+}
+
+//Calculate BAI
+function calBAI(image){
+  var BAI = image.expression('1 / ((0.1 - Red)*(0.1 - Red) + (0.06 - NIR)*(0.06 - NIR))',{
+      NIR: image.select('B8'),
+      Red: image.select('B4'),
+  }).rename('BAI');
+  return image.addBands(BAI);
+}
+
+//OTSU calculates the threshold
+function otsu(histogram) {
+  var counts = ee.Array(ee.Dictionary(histogram).get('histogram'));
+  var means = ee.Array(ee.Dictionary(histogram).get('bucketMeans'));
+  var size = means.length().get([0]);
+  var total = counts.reduce(ee.Reducer.sum(), [0]).get([0]);
+  var sum = means.multiply(counts).reduce(ee.Reducer.sum(), [0]).get([0]);
+  var mean = sum.divide(total);
+  var indices = ee.List.sequence(1, size);
+  var bss = indices.map(function(i) {
+    var aCounts = counts.slice(0, 0, i);
+    var aCount = aCounts.reduce(ee.Reducer.sum(), [0]).get([0]);
+    var aMeans = means.slice(0, 0, i);
+    var aMean = aMeans.multiply(aCounts)
+        .reduce(ee.Reducer.sum(), [0]).get([0])
+        .divide(aCount);
+    var bCount = total.subtract(aCount);
+    var bMean = sum.subtract(aCount.multiply(aMean)).divide(bCount);
+    return aCount.multiply(aMean.subtract(mean).pow(2)).add(
+           bCount.multiply(bMean.subtract(mean).pow(2)));
+  });
+  return means.sort(bss).get([-1]);
+}
+
+//calculate NBR Mask
+function calNBRMask(image){
+  var MNBR_S2 = image.select("NBR");
+  var histogram = MNBR_S2.reduceRegion({
+    reducer: ee.Reducer.histogram(), 
+    geometry: roi, 
+    scale: 30,
+    maxPixels: 1e13,
+    tileScale: 8
+  });
+  var threshold_S2 = otsu(histogram.get("NBR"));
+  var NBRmask = MNBR_S2.gte(threshold_S2);
+  return image.addBands(NBRmask.rename('NBRmask'));
+}
+
+//calculate dNBR Mask
+function caldNBRMask(image1,image2){
+  var MNBR_S2 = image1.select("dNBR");
+  var histogram = MNBR_S2.reduceRegion({
+    reducer: ee.Reducer.histogram(), 
+    geometry: roi, 
+    scale: 30,
+    maxPixels: 1e13,
+    tileScale: 8
+  });
+  var threshold_S2 = otsu(histogram.get("dNBR"));
+  var NBRmask = MNBR_S2.gte(threshold_S2);
+  return image1.addBands(NBRmask.rename('NBRmask'));
+}
+
+//calculate BAI Mask
+function calBAIMask(image){
+  var MBAI_S2 = image.select("BAI");
+  var histogram = MBAI_S2.reduceRegion({
+    reducer: ee.Reducer.histogram(), 
+    geometry: roi, 
+    scale: 30,
+    maxPixels: 1e13,
+    tileScale: 8
+  });
+  var threshold_S2 = otsu(histogram.get("BAI"));
+  var BAImask = MBAI_S2.gte(threshold_S2);
+  return image.addBands(BAImask.rename('BAImask'));
+}
+
+//Run the NBR pre-fire mask function
+var NBRS2_01 = calNBR(newImgS2_01)
+NBRS2_01 = calNBRMask(NBRS2_01).select('NBRmask')
+print(NBRS2_01)
+//Map.addLayer(NBRS2_01, {min:0, max:1, palette:['red', '#DDDDDD']}, 'S2_NBR_1');
+
+//Run the NBR post-fire mask function
+var NBRS2_02 = calNBR(newImgS2_02)
+NBRS2_02 = calNBRMask(NBRS2_02).select('NBRmask')
+print(NBRS2_02)
+//Map.addLayer(NBRS2_02, {min:0, max:1, palette:['red', '#DDDDDD']}, 'S2_NBR_2');
+
+//Run the dNBR mask function
+var dNBRS2_01 = calNBR(newImgS2_01)
+var dNBRS2_02 = calNBR(newImgS2_02)
+var dNBRS2 = caldNBR(dNBRS2_01,dNBRS2_02)  
+dNBRS2 = caldNBRMask(dNBRS2).select('NBRmask')
+print(dNBRS2)
+Map.addLayer(dNBRS2, {min:0, max:1, palette:['#DDDDDD', 'red']}, 'S2_dNBR');
+
+//Run the BAI mask function
+//var BAIS2_01 = calBAI(newImgS2_01)  
+//BAIS2_01 = calBAIMask(BAIS2_01).select('BAImask')
+//print(BAIS2_01)
+//Map.addLayer(BAIS2_01, {min:0, max:1, palette:['#DDDDDD', 'red']}, 'S2_BAI_01');
+
+//Run the BAI mask function
+var BAIS2_02 = calBAI(newImgS2_02)  
+BAIS2_02 = calBAIMask(BAIS2_02).select('BAImask')
+print(BAIS2_02)
+Map.addLayer(BAIS2_02, {min:0, max:1, palette:['#DDDDDD', 'red']}, 'S2_BAI_02');
+
+//download probabilistic images of fire burn scars
+Export.image.toDrive({
+  image:dNBRS2,
+  description: 'dNBRS2',
+  scale:30,
+  crs: "EPSG:32649", 
+  region:roi,
+  fileFormat: 'GeoTIFF',
+  maxPixels:1e13,
+});
+
+//Export.image.toDrive({
+//  image:BAIS2_02,
+//  description: 'BAIS2_02',
+//  scale:30,
+//  crs: "EPSG:32649", 
+//  region:roi,
+//  fileFormat: 'GeoTIFF',
+//  maxPixels:1e13,});
+
+Export.image.toDrive({
+  image:newImgS2_01,
+  description: 'S2_',
+  scale:10,
+  crs: "EPSG:32649", 
+  region:roi,
+  fileFormat: 'GeoTIFF',
+  maxPixels:1e13,
+});
+
+Export.image.toDrive({
+  image:newImgS2_02,
+  description: 'S2_',
+  scale:10,
+  crs: "EPSG:32649", 
+  region:roi,
+  fileFormat: 'GeoTIFF',
+  maxPixels:1e13,
+});
