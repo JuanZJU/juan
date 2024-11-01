@@ -1,0 +1,46 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using H8_Burned_area;
+using OSGeo.OSR;
+using OSGeo.GDAL;
+using System.IO;
+
+namespace H8_Burned_area
+{
+    public partial class Form1 : Form
+    {
+        public Form1()
+        {
+            InitializeComponent();
+        }
+        private void button1_Click(object sender, EventArgs e)
+        {
+            sub_pixel n = new sub_pixel();
+
+            string file2 = @"D:\Article\Experiment_BASM_FERB\FE_2CZGY166.82_73.8ChenZhouGY_20191216(20200105)\ES3_FCLS\S2_Dif_Post20200105_PZ_Res_FCLS_Clip.dat";    //FCLS result 
+            string file1 = @"D:\Article\Experiment_BASM_FERB\FE_2CZGY166.82_73.8ChenZhouGY_20191216(20200105)\ES2_FeatureExtractionRuleBased\S2_Dif_Post20200105_PZ_Res_FERB_class.dat";  //FERB result
+          //******Cyclic output path for continuous testing*******
+            string d = @"D:\Article\Experiment_BASM_FERB\FE_2CZGY166.82_73.8ChenZhouGY_20191216(20200105)\ES4_YXY_FERB\YXY_BurndArea_FERB_";
+            int g = 1;
+            string f = ".tif";
+            string outfile2 = d + g.ToString() + f;
+            while (File.Exists(outfile2))
+            {
+                g++;
+                outfile2 = d+g.ToString()+f;  //Output subpixel mapping result
+            }
+          //***********
+
+            n.sub_pixel_func(file2, file1, outfile2, 5);     //5 assign to inputnum in sub_pixel_func
+            MessageBox.Show("Run Completion");
+        }
+    }
+}

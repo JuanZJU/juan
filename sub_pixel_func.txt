@@ -1,0 +1,266 @@
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Windows.Forms;
+using System.IO;
+using OSGeo.OSR;
+using OSGeo.GDAL;
+using System.Collections.Generic;
+using System;
+using System.Threading.Tasks;
+
+namespace H8_Burned_area
+{    
+    class sub_pixel
+    {
+        private int sub_width;
+        private int sub_height;
+        public int sub_pixel_num;        
+        public int width;
+        public int height;
+        //public int width1;
+        //public int height1;
+        public double []dndata1;//
+
+        public void sub_pixel_func(string img_file, string img_RF, string outfile2, int inputnum)  //The output does not need to be returned，void
+        {
+            sub_pixel_num = inputnum;
+            Driver dri = Gdal.GetDriverByName("GTiff");      
+            Dataset d_img = Gdal.Open(img_file, Access.GA_ReadOnly);    
+            Dataset d_img1 = Gdal.Open(img_RF, Access.GA_ReadOnly);    
+            List<int[]> H8xyGeoTransform = new List<int[]>();
+            this.height = d_img.RasterYSize;
+            this.width = d_img.RasterXSize;
+            Band band3 = d_img.GetRasterBand(1);     //！！！！！！！！！！！！Read the burned area band, need to confirm which band！！！！！！！！！！！
+            //this.height1=d_img1.RasterYSize;
+           // this.width1 = d_img1.RasterXSize;
+            Band band1 = d_img1.GetRasterBand(1);
+
+            double[] dndata3 = new double[height * width];       
+            band3.ReadRaster(0, 0, width, height, dndata3, width, height, 0, 0);    
+            dndata1 = new double[height * width];
+            band1.ReadRaster(0, 0, width, height, dndata1, width, height, 0, 0);
+
+            sub_width = width * sub_pixel_num;
+            sub_height = height * sub_pixel_num;          
+            int[] outimg = new int[width * height * sub_pixel_num * sub_pixel_num];
+            
+            //sub_location(fdimg)
+            double[,] ya = sub_location(dndata3);
+            for (int i = 0; i < sub_width; i++)
+                for (int k = 0; k < sub_height; k++)
+                {
+                    outimg[k * sub_width + i] = (int)ya[k, i];                                                             
+                }
+                     
+            string strOut2 = outfile2;   //output path             
+            Dataset outds2 = dri.Create(strOut2, sub_width, sub_height, 1, DataType.GDT_Byte, null); 
+            double[] img_xyGeoTransform = new double[6];             
+            d_img.GetGeoTransform(img_xyGeoTransform);       
+            string pro = d_img.GetProjection();          
+            img_xyGeoTransform[1] = img_xyGeoTransform[1] / sub_pixel_num;   //East-west resolution, divided by the number of subpixel
+            img_xyGeoTransform[5] = img_xyGeoTransform[5] / sub_pixel_num;   //North-south resolution, divided by the number of subpixel
+            outds2.SetProjection(pro);     
+            outds2.SetGeoTransform(img_xyGeoTransform);   
+
+          //********Write image data to outds2******
+            outds2.GetRasterBand(1).WriteRaster(0, 0, sub_width, sub_height, outimg, sub_width, sub_height, 0, 0);
+            outds2.GetRasterBand(1).FlushCache();
+            outds2.FlushCache();
+        }
+
+        public double[,] sub_location(double[] fdimg)   
+        {
+            double[,] yaxiangyujuzhen = new double[sub_pixel_num * height, sub_pixel_num * width];
+            int searchwindow = sub_pixel_num * 2 - 1;  
+            double distance;   
+
+          //*********Initialize the subpixel matrix***********//
+            for (int i = 0; i < width; i++)     
+            {
+                for (int k = 0; k < height; k++)       
+                {
+                    if (fdimg[k * width + i] != 0)   
+                    {
+                        double[] sub = new double[sub_pixel_num * sub_pixel_num];
+                        int firenum = (int)Math.Round(sub_pixel_num * sub_pixel_num * fdimg[k * width + i]);  
+
+                        //if (firenum == 0)
+                        //{ firenum = 1; }
+                        
+                        int[] ori = getRandomNum(sub_pixel_num * sub_pixel_num, 1, sub_pixel_num * sub_pixel_num + 1);  
+                        for (int j1 = 0; j1 < sub_pixel_num; j1++)
+                        {
+                            for (int j2 = 0; j2 < sub_pixel_num; j2++)
+                            {
+                                if (ori[j2 * sub_pixel_num + j1] < firenum + 1)   
+                                {
+                                    yaxiangyujuzhen[k * sub_pixel_num + j2, i * sub_pixel_num + j1] = 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+          
+            //*******improved pixel-swapping algorithm****************//
+            double ddnum = 0;  
+            while (ddnum < 30)
+            {
+                int minX = 0;
+                int minY = 0;
+                int maxX = 0;
+                int maxY = 0;
+                double tempt1 = 0;
+                double tempt2 = 0;
+                int serachwin2 = 1;
+                
+
+                for (int i = 3; i < width - 3; i++)     
+                {
+                    for (int k = 3; k < height - 3; k++)      
+                    {
+                        int flag = 0;
+                        for (int m = -1 * serachwin2; m <= serachwin2; m++)
+                        {
+                            if (flag == 1)
+                            {
+                                break;
+                            }
+                            for (int n = -1 * serachwin2; n <= serachwin2; n++)
+                            {
+
+                                if (dndata1[(k + n) * width + (i + m)] == 1)    
+                                {
+                                    flag = 1;
+                                    break;
+
+                                }
+
+                            }
+                        }
+
+                        if (flag == 0)
+                        {
+                            for (int subnum1 = 0; subnum1 < sub_pixel_num; subnum1++)
+                            {
+                                for (int subnum2 = 0; subnum2 < sub_pixel_num; subnum2++)
+                                {
+                                    yaxiangyujuzhen[k * sub_pixel_num + subnum2, i * sub_pixel_num + subnum1] = 0;
+                                }
+                            }
+                            continue;
+                        }
+
+
+
+                            minX = 0;
+                            minY = 0;
+                            maxX = 0;
+                            maxY = 0;
+                            if (fdimg[k * width + i] != 0)
+                            {
+                                int firejs = 0;
+                                int nofirejs = 0;
+                                for (int subnum1 = 0; subnum1 < sub_pixel_num; subnum1++)
+                                {
+                                    for (int subnum2 = 0; subnum2 < sub_pixel_num; subnum2++)
+                                    {    
+                                        double space = 0;
+                                        for (int s1 = -1 * searchwindow; s1 < searchwindow; s1++)
+                                        {
+                                            for (int s2 = -1 * searchwindow; s2 < searchwindow; s2++)   
+                                            {
+                                                if (s1 != 0 || s2 != 0)
+                                                {
+                                                    distance = Math.Sqrt(s1 * s1 + s2 * s2)/3;   
+                                                    space = space + Math.Exp(-1 * distance) * yaxiangyujuzhen[k * sub_pixel_num + subnum2 + s1, i * sub_pixel_num + subnum1 + s2];
+                                                }
+                                            }
+                                        }
+                                        if (yaxiangyujuzhen[k * sub_pixel_num + subnum2, i * sub_pixel_num + subnum1] != 0)
+                                        {
+                                            firejs = firejs + 1;        
+                                            if (firejs == 1)
+                                            {
+                                                tempt1 = space;
+                                                minY = k * sub_pixel_num + subnum2;
+                                                minX = i * sub_pixel_num + subnum1;
+                                            }
+                                        }
+                                        if (yaxiangyujuzhen[k * sub_pixel_num + subnum2, i * sub_pixel_num + subnum1] == 0)
+                                        {
+                                            nofirejs = nofirejs + 1;      
+                                            if (nofirejs == 1)
+                                            {
+                                                tempt2 = space;
+                                                maxY = k * sub_pixel_num + subnum2;
+                                                maxX = i * sub_pixel_num + subnum1;
+                                            }
+                                        }
+                                        if (space < tempt1 && yaxiangyujuzhen[k * sub_pixel_num + subnum2, i * sub_pixel_num + subnum1] != 0)
+                                        //Calculate the minimum spatial attraction in the fire point
+                                        {
+                                            tempt1 = space;
+                                            minY = k * sub_pixel_num + subnum2;
+                                            minX = i * sub_pixel_num + subnum1;
+                                        }
+                                        if (space > tempt2 && yaxiangyujuzhen[k * sub_pixel_num + subnum2, i * sub_pixel_num + subnum1] == 0)
+                                        //Calculate the maximum spatial attraction in the non-fire point
+                                        {
+                                            tempt2 = space;
+                                            maxY = k * sub_pixel_num + subnum2;
+                                            maxX = i * sub_pixel_num + subnum1;
+                                        }
+                                    }
+                                }
+                                if (tempt1 < tempt2)              
+                                {
+                                    yaxiangyujuzhen[minY, minX] = 0;
+                                    yaxiangyujuzhen[maxY, maxX] = 1;
+                                }
+                            }
+                        }
+                    }
+                    ddnum = ddnum + 1;
+                }
+
+                
+            return yaxiangyujuzhen;
+        }
+
+        private int[] getRandomNum(int num, int minValue, int maxValue)    
+        {
+            Random ra = new Random(unchecked((int)DateTime.Now.Ticks));
+            int[] arrNum = new int[num];
+            int tmp = 0;
+            for (int i = 0; i <= num - 1; i++)
+            {
+                tmp = ra.Next(minValue, maxValue); 
+                arrNum[i] = getNum(arrNum, tmp, minValue, maxValue, ra);
+                
+            }
+            return arrNum;
+        }
+
+        public int getNum(int[] arrNum, int tmp, int minValue, int maxValue, Random ra)
+        {
+            int n = 0;
+            while (n <= arrNum.Length - 1)
+            {
+                if (arrNum[n] == tmp)   
+                {
+                    tmp = ra.Next(minValue, maxValue); 
+                    n = 0;  
+                }
+                else
+                {
+                    n = n + 1;
+                }
+            }
+            return tmp;
+        }
+    }
+}
